@@ -1,9 +1,10 @@
 // shh — 기술 검증 스파이크
 // 확인할 것: 투명 패널이 키보드 포커스를 가져가서 한글 입력을 받고, 화면에는 아무것도 안 보이는가?
-// 전역 단축키는 다음 단계에서 붙이고, 지금은 메뉴바 메뉴로 몰래 입력 모드를 켭니다.
+// ⌃⌥; 전역 단축키로 몰래 입력 모드를 켜고 끕니다. (메뉴바 메뉴로도 가능)
 
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox
 
 @main
 struct shhApp: App {
@@ -28,12 +29,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
     private var textView: NSTextView!
     private var isCapturing = false
     private var lastMemo = ""
+    private var hotKeyRef: EventHotKeyRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Dock에 안 뜨는 메뉴바 전용 앱으로
         NSApp.setActivationPolicy(.accessory)
         setupStatusItem()
         setupPanel()
+        registerHotKey()
+    }
+
+    // MARK: - 전역 단축키 (⌃⌥;)
+
+    // 단축키를 바꾸고 싶으면 이 두 줄만 고치면 됨
+    private let hotKeyCode = UInt32(kVK_ANSI_Semicolon)
+    private let hotKeyModifiers = UInt32(controlKey | optionKey)
+
+    private func registerHotKey() {
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+
+        // 단축키가 눌리면 toggleCapture() 호출
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, _, userData in
+                guard let userData else { return noErr }
+                let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+                Task { @MainActor in delegate.toggleCapture() }
+                return noErr
+            },
+            1, &eventType,
+            Unmanaged.passUnretained(self).toOpaque(),
+            nil
+        )
+
+        let hotKeyID = EventHotKeyID(signature: OSType(0x7368_6868), id: 1) // 'shhh'
+        let status = RegisterEventHotKey(
+            hotKeyCode, hotKeyModifiers, hotKeyID,
+            GetApplicationEventTarget(), 0, &hotKeyRef
+        )
+        print(status == noErr ? "단축키 등록 완료" : "단축키 등록 실패: \(status) (다른 앱이나 시스템이 이미 쓰는 조합일 수 있음)")
+    }
+
+    func toggleCapture() {
+        isCapturing ? stopCapture() : startCapture()
     }
 
     // MARK: - 메뉴바
@@ -43,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         statusItem.button?.title = "shh"
 
         let menu = NSMenu()
-        menu.addItem(withTitle: "몰래 입력 시작", action: #selector(startCapture), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "몰래 입력 시작 (⌃⌥;)", action: #selector(startCapture), keyEquivalent: "").target = self
         menu.addItem(withTitle: "마지막 메모 보기", action: #selector(showLastMemo), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
