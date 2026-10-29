@@ -1,6 +1,6 @@
-// shh — 기술 검증 스파이크
-// 확인할 것: 투명 패널이 키보드 포커스를 가져가서 한글 입력을 받고, 화면에는 아무것도 안 보이는가?
-// ⌃⌥; 전역 단축키로 몰래 입력 모드를 켜고 끕니다. (메뉴바 메뉴로도 가능)
+// shh — 화면에 아무것도 안 보이게 타이핑만으로 메모하는 맥 메뉴바 앱
+// ⌃⌥; 로 몰래 입력 모드를 켜고, 같은 단축키나 Esc로 끄면 메모 1개가 저장됩니다.
+// 메뉴바의 shh를 누르면 최근 메모 5개가 보입니다.
 
 import SwiftUI
 import AppKit
@@ -23,12 +23,12 @@ final class InvisiblePanel: NSPanel {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NSWindowDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var panel: InvisiblePanel!
     private var textView: NSTextView!
     private var isCapturing = false
-    private var lastMemo = ""
+    private let recentCount = 5 // 메뉴에 보여줄 최근 메모 개수
     private var hotKeyRef: EventHotKeyRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -83,12 +83,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "shh"
 
+        // 메뉴 내용은 열릴 때마다 menuNeedsUpdate에서 새로 채움
         let menu = NSMenu()
-        menu.addItem(withTitle: "몰래 입력 시작 (⌃⌥;)", action: #selector(startCapture), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "마지막 메모 보기", action: #selector(showLastMemo), keyEquivalent: "").target = self
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.delegate = self
         statusItem.menu = menu
+    }
+
+    // 메뉴가 열리기 직전에 호출됨 → 파일에서 최신 메모를 읽어 목록을 다시 만듦
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        menu.addItem(withTitle: "몰래 입력 시작 (⌃⌥;)", action: #selector(startCapture), keyEquivalent: "").target = self
+        menu.addItem(.separator())
+
+        let header = NSMenuItem(title: "최근 메모", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        let recent = loadMemos().suffix(recentCount).reversed() // 최신이 위로
+        if recent.isEmpty {
+            let empty = NSMenuItem(title: "  (아직 메모 없음)", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        }
+        for memo in recent {
+            let item = NSMenuItem(title: menuTitle(for: memo), action: #selector(showMemo(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = memo
+            item.toolTip = memo.text // 마우스를 올리면 전체 내용
+            menu.addItem(item)
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "메모 파일 열기", action: #selector(openMemoFile), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    // "10-30 01:12  첫 줄 내용…" 형태로 짧게
+    private func menuTitle(for memo: Memo) -> String {
+        let time = String(memo.date.dropFirst(5)) // "yyyy-" 제거
+        let lines = memo.text.components(separatedBy: .newlines)
+        let first = lines.first ?? ""
+        let maxLength = 24
+        var preview = String(first.prefix(maxLength))
+        if first.count > maxLength || lines.count > 1 { preview += "…" }
+        return "\(time)  \(preview)"
     }
 
     // MARK: - 투명 패널
@@ -162,7 +201,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         statusItem.button?.title = "shh"
 
         guard !text.isEmpty else { return }
-        lastMemo = text
         save(text)
     }
 
@@ -187,12 +225,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
 
     // MARK: - 저장
 
-    private func save(_ text: String) {
-        let fm = FileManager.default
-        let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    // 메모는 ~/Library/Application Support/shh/memos.md 한 파일에 쌓임
+    private var memoFileURL: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("shh", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("memos.md")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("memos.md")
+    }
+
+    // memos.md를 읽어서 메모 목록으로 (오래된 순)
+    // 파일 형식: "## yyyy-MM-dd HH:mm" 줄 다음에 내용, 그 다음 빈 줄
+    private func loadMemos() -> [Memo] {
+        guard let content = try? String(contentsOf: memoFileURL, encoding: .utf8) else { return [] }
+
+        var memos: [Memo] = []
+        var currentDate: String?
+        var bodyLines: [String] = []
+
+        func flush() {
+            guard let date = currentDate else { return }
+            let text = bodyLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { memos.append(Memo(date: date, text: text)) }
+        }
+
+        for line in content.components(separatedBy: "\n") {
+            // 날짜 형식까지 정확히 맞는 줄만 제목으로 인식 (메모 안에 "## "를 써도 안 깨지게)
+            if line.range(of: #"^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}$"#, options: .regularExpression) != nil {
+                flush()
+                currentDate = String(line.dropFirst(3))
+                bodyLines = []
+            } else {
+                bodyLines.append(line)
+            }
+        }
+        flush()
+        return memos
+    }
+
+    private func save(_ text: String) {
+        let file = memoFileURL
 
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
@@ -208,13 +279,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate, NS
         print("저장됨: \(file.path)")
     }
 
-    // MARK: - 확인용
+    // MARK: - 메모 보기
 
-    @objc private func showLastMemo() {
+    // 메뉴에서 메모를 누르면 전체 내용을 보여줌
+    @objc private func showMemo(_ sender: NSMenuItem) {
+        guard let memo = sender.representedObject as? Memo else { return }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "마지막 메모"
-        alert.informativeText = lastMemo.isEmpty ? "(아직 없음)" : lastMemo
-        alert.runModal()
+        alert.messageText = memo.date
+        alert.informativeText = memo.text
+        alert.addButton(withTitle: "닫기")
+        alert.addButton(withTitle: "복사")
+        if alert.runModal() == .alertSecondButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(memo.text, forType: .string)
+        }
     }
+
+    // Finder에서 memos.md 위치를 열어줌
+    @objc private func openMemoFile() {
+        NSWorkspace.shared.activateFileViewerSelecting([memoFileURL])
+    }
+}
+
+struct Memo {
+    let date: String  // "yyyy-MM-dd HH:mm"
+    let text: String
 }
