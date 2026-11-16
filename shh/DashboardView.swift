@@ -1,52 +1,109 @@
-// 대시보드 — 왼쪽: 검색 + 메모 목록, 오른쪽: 메모 내용 보기/편집
+// 대시보드 — 왼쪽: 메모/휴지통 탭 + 검색 + 목록, 오른쪽: 메모 내용 보기/편집
 
 import SwiftUI
 import AppKit
 
+private enum DashboardTab: Hashable {
+    case memos, trash
+}
+
 struct DashboardView: View {
     @EnvironmentObject private var store: MemoStore
+    @State private var tab: DashboardTab = .memos
     @State private var query = ""
+    @State private var isConfirmingEmptyTrash = false
 
     private var filteredMemos: [Memo] {
+        let source = tab == .memos ? store.memos : store.trashedMemos
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return store.memos }
-        return store.memos.filter { $0.text.localizedCaseInsensitiveContains(q) }
+        guard !q.isEmpty else { return source }
+        return source.filter { $0.text.localizedCaseInsensitiveContains(q) }
     }
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
+                Picker("", selection: $tab) {
+                    Text("메모 \(store.memos.count)").tag(DashboardTab.memos)
+                    Text("휴지통 \(store.trashedMemos.count)").tag(DashboardTab.trash)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding([.horizontal, .top], 8)
+
                 HStack(spacing: 6) {
                     TextField("검색", text: $query)
                         .textFieldStyle(.roundedBorder)
-                    Button {
-                        if let memo = store.create("") { store.selection = memo.id }
-                    } label: {
-                        Image(systemName: "square.and.pencil")
+
+                    if tab == .memos {
+                        Button {
+                            if let memo = store.create("") { store.selection = memo.id }
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .help("새 메모")
+                    } else {
+                        Button {
+                            isConfirmingEmptyTrash = true
+                        } label: {
+                            Image(systemName: "trash.slash")
+                        }
+                        .help("휴지통 비우기")
+                        .disabled(store.trashedMemos.isEmpty)
                     }
-                    .buttonStyle(.borderless)
-                    .help("새 메모")
                 }
+                .buttonStyle(.borderless)
                 .padding(8)
 
                 List(filteredMemos, selection: $store.selection) { memo in
                     MemoRow(memo: memo)
+                        .contextMenu {
+                            if tab == .memos {
+                                Button("휴지통으로 이동") { store.moveToTrash(memo.id) }
+                            } else {
+                                Button("복구") { store.restore(memo.id) }
+                            }
+                        }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 250)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
-            if let id = store.selection, let memo = store.memos.first(where: { $0.id == id }) {
-                MemoDetail(memo: memo)
-                    .id(memo.id) // 다른 메모를 고르면 편집 상태를 새로 만듦
+            if let id = store.selection, let memo = store.memo(for: id) {
+                Group {
+                    if store.isTrashed(id) {
+                        TrashedMemoDetail(memo: memo)
+                    } else {
+                        MemoDetail(memo: memo)
+                    }
+                }
+                .id(memo.id) // 다른 메모를 고르면 상태를 새로 만듦
             } else {
                 ContentUnavailableView(
-                    "메모를 선택하세요",
-                    systemImage: "note.text",
-                    description: Text("메모 \(store.memos.count)개")
+                    tab == .memos ? "메모를 선택하세요" : "휴지통",
+                    systemImage: tab == .memos ? "note.text" : "trash",
+                    description: Text(tab == .memos
+                        ? "메모 \(store.memos.count)개"
+                        : "삭제한 메모는 여기서 복구하거나 영구 삭제할 수 있어요")
                 )
             }
         }
-        .frame(minWidth: 640, minHeight: 400)
+        .frame(minWidth: 680, minHeight: 420)
+        // 탭을 바꾸면, 선택된 메모가 그 탭에 없을 때만 선택 해제
+        .onChange(of: tab) { _, newTab in
+            if let id = store.selection, store.isTrashed(id) != (newTab == .trash) {
+                store.selection = nil
+            }
+        }
+        // 메뉴바에서 메모를 눌러 열었을 때 등, 선택된 메모가 있는 탭으로 자동 이동
+        .onChange(of: store.selection) { _, id in
+            guard let id else { return }
+            tab = store.isTrashed(id) ? .trash : .memos
+        }
+        .confirmationDialog("휴지통을 비울까요?", isPresented: $isConfirmingEmptyTrash) {
+            Button("휴지통 비우기", role: .destructive) { store.emptyTrash() }
+        } message: {
+            Text("휴지통의 메모 \(store.trashedMemos.count)개가 완전히 삭제되고, 되돌릴 수 없어요.")
+        }
     }
 }
 
@@ -65,12 +122,12 @@ private struct MemoRow: View {
     }
 }
 
+// 일반 메모: 바로 편집 가능
 private struct MemoDetail: View {
     @EnvironmentObject private var store: MemoStore
     let memo: Memo
 
     @State private var text: String
-    @State private var isConfirmingDelete = false
 
     init(memo: Memo) {
         self.memo = memo
@@ -91,12 +148,12 @@ private struct MemoDetail: View {
                     Image(systemName: "doc.on.doc")
                 }
                 .help("복사")
-                Button(role: .destructive) {
-                    isConfirmingDelete = true
+                Button {
+                    store.moveToTrash(memo.id)
                 } label: {
                     Image(systemName: "trash")
                 }
-                .help("삭제")
+                .help("휴지통으로 이동")
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 16)
@@ -113,10 +170,48 @@ private struct MemoDetail: View {
         .onChange(of: text) { _, newValue in
             store.update(memo.id, text: newValue)
         }
-        .confirmationDialog("이 메모를 삭제할까요?", isPresented: $isConfirmingDelete) {
-            Button("삭제", role: .destructive) { store.delete(memo.id) }
+    }
+}
+
+// 휴지통 메모: 읽기만 가능, 복구 또는 영구 삭제
+private struct TrashedMemoDetail: View {
+    @EnvironmentObject private var store: MemoStore
+    let memo: Memo
+
+    @State private var isConfirmingDelete = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("휴지통에 있는 메모", systemImage: "trash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("복구", systemImage: "arrow.uturn.backward") {
+                    store.restore(memo.id)
+                }
+                Button("영구 삭제", systemImage: "xmark.bin", role: .destructive) {
+                    isConfirmingDelete = true
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            ScrollView {
+                Text(memo.text)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(17)
+            }
+        }
+        .confirmationDialog("이 메모를 영구 삭제할까요?", isPresented: $isConfirmingDelete) {
+            Button("영구 삭제", role: .destructive) { store.deletePermanently(memo.id) }
         } message: {
-            Text("삭제한 메모는 되돌릴 수 없어요.")
+            Text("영구 삭제한 메모는 되돌릴 수 없어요.")
         }
     }
 }
