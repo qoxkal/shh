@@ -34,7 +34,15 @@ A macOS menu bar app for invisible note-taking.
 
 ## Installation
 
-배포용 빌드는 아직 제공하지 않음. 소스에서 빌드:
+### Releases에서 받기
+
+1. [Releases](https://github.com/qoxkal/shh/releases)에서 최신 버전의 `shh.zip` 다운로드
+2. 압축을 풀고 `shh.app`을 `/Applications`로 이동
+3. 처음 실행 시 "확인되지 않은 개발자" 경고가 뜨면 우클릭 → **열기** (또는 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**)
+
+업데이트할 때는 메뉴바 `shh` → **종료** 후 새 `shh.app`으로 교체. 기존 메모는 유지됨.
+
+### 소스에서 빌드
 
 ```bash
 git clone https://github.com/qoxkal/shh.git
