@@ -9,7 +9,8 @@ A macOS menu bar app for invisible note-taking.
 - 전역 단축키 `⌃⌥;`로 입력 모드 토글
 - 입력 내용 화면 비표시 (한글 IME 지원)
 - 모드 종료 시 메모 1건으로 로컬 저장
-- 메뉴바에서 최근 메모 5건 조회, 전체 보기 및 복사
+- 메뉴바에서 최근 메모 5건 조회
+- 대시보드: 메모 목록, 검색, 편집(자동 저장), 복사, 삭제
 - Dock 아이콘 및 창 없음 (메뉴바 전용)
 
 ## Usage
@@ -20,6 +21,7 @@ A macOS menu bar app for invisible note-taking.
 | 입력 모드 종료 및 저장 | `⌃⌥;` 또는 `Esc` |
 | 삭제 | `Backspace` |
 | 최근 메모 조회 | 메뉴바 `shh` 클릭 |
+| 대시보드 열기 | 메뉴바 `shh` → 대시보드 열기, 또는 최근 메모 항목 클릭 |
 
 - 입력 모드 중 메뉴바 표시가 `shh` → `shh·`로 변경됨
 - 입력 모드 중에는 문자 입력, `Backspace`, `Return`만 허용. 방향키 및 선택 등 커서 이동 동작은 비활성화됨
@@ -47,20 +49,20 @@ open shh/shh.xcodeproj
 
 ## Storage
 
+메모 1건당 마크다운 파일 1개로 저장
+
 ```
-~/Library/Application Support/shh/memos.md
+~/Library/Containers/com.hyeona.shh/Data/Library/Application Support/shh/memos/
+├── 2026-11-10 20-04-12.md
+├── 2026-11-10 20-31-05.md
+└── 2026-11-11 09-15-40.md
 ```
 
+- 앱 샌드박스 때문에 실제 경로는 `~/Library/Containers/` 아래. 메뉴바 `shh` → **메모 폴더 열기**로 바로 열 수 있음
+- 파일 이름이 작성 시각, 파일 내용이 메모 본문. 별도 메타데이터 없음
+- 폴더의 파일을 직접 추가·수정·삭제해도 앱에 반영됨
 - 로컬에만 저장. 네트워크 통신 없음
-- 형식:
-
-```markdown
-## 2026-10-30 01:12
-메모 내용
-
-## 2026-10-30 09:45
-다음 메모
-```
+- 이전 버전의 `memos.md`는 첫 실행 시 메모별 파일로 자동 변환되고, 원본은 `memos.md.bak`으로 보관됨
 
 ## How it works
 
@@ -69,7 +71,7 @@ open shh/shh.xcodeproj
 1. Carbon `RegisterEventHotKey`로 전역 단축키 등록
 2. 단축키 입력 시 투명한 `NSPanel`(`.nonactivatingPanel`)이 키보드 포커스를 획득
 3. 패널 내 `NSTextView`가 입력을 받음. 텍스트, 커서, 조합 중 문자를 모두 투명 처리
-4. 입력 모드 종료 시 패널을 숨기고 내용을 파일에 추가
+4. 입력 모드 종료 시 패널을 숨기고 내용을 새 마크다운 파일로 저장
 
 이 방식의 특성:
 - 손쉬운 사용, 입력 모니터링 등 추가 권한 불필요
